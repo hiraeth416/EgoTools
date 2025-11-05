@@ -11,10 +11,10 @@ from concurrent.futures import ThreadPoolExecutor
 
 def search_bilibili(search_query: str, max_results: int = 500) -> pd.DataFrame:
     """
-    在Bilibili上搜索视频
+    Search videos on Bilibili
     """
     try:
-        # 使用yt-dlp搜索Bilibili
+        # Use yt-dlp to search Bilibili
         command = [
             'yt-dlp',
             '--skip-download',
@@ -36,17 +36,17 @@ def search_bilibili(search_query: str, max_results: int = 500) -> pd.DataFrame:
             df['platform'] = 'bilibili'
             return df
     except Exception as e:
-        print(f"Bilibili搜索失败: {str(e)}")
+        print(f"Bilibili search failed: {str(e)}")
     return pd.DataFrame()
 
 def search_tiktok(search_query: str, max_results: int = 500) -> pd.DataFrame:
     """
-    在TikTok上搜索视频
+    Search videos on TikTok
     """
     try:
-        # 将搜索词转换为TikTok标签格式
+        # Convert search terms to TikTok tag format
         search_terms = search_query.replace('#', '').split()
-        # 将多个词组合成一个标签
+        # Combine multiple words into a single tag
         tag = ''.join(word.capitalize() for word in search_terms)
         
         all_results = []
@@ -69,18 +69,18 @@ def search_tiktok(search_query: str, max_results: int = 500) -> pd.DataFrame:
                 ]
                 all_results.extend(raw_data)
         except Exception as e:
-            print(f"TikTok标签 '{tag}' 搜索失败: {str(e)}")
+            print(f"TikTok tag '{tag}' search failed: {str(e)}")
         
         if all_results:
             df = pd.DataFrame(all_results)
             df['platform'] = 'tiktok'
             return df
     except Exception as e:
-        print(f"TikTok搜索失败: {str(e)}")
+        print(f"TikTok search failed: {str(e)}")
     return pd.DataFrame()
 
 class Duration:
-    """视频时长的数据类"""
+    """Video duration data class"""
     def __init__(self, hours=0, minutes=0, seconds=0):
         self.hours = hours
         self.minutes = minutes
@@ -96,26 +96,26 @@ class Duration:
     
     def __str__(self):
         if self.hours > 0:
-            return f"{self.hours}小时{self.minutes}分钟{self.seconds}秒"
+            return f"{self.hours}hours{self.minutes}minutes{self.seconds}seconds"
         elif self.minutes > 0:
-            return f"{self.minutes}分钟{self.seconds}秒"
+            return f"{self.minutes}minutes{self.seconds}seconds"
         else:
-            return f"{self.seconds}秒"
+            return f"{self.seconds}seconds"
 
 def parse_duration(duration_string):
     """
-    解析时长为Duration对象
-    支持以下格式:
+    Parse duration string to Duration object
+    Supports the following formats:
     - "1:23:45" -> Duration(hours=1, minutes=23, seconds=45)
     - "5:30" -> Duration(minutes=5, seconds=30)
     - "42" -> Duration(seconds=42)
-    - 123.45 (浮点数秒) -> Duration(minutes=2, seconds=3)
+    - 123.45 (float seconds) -> Duration(minutes=2, seconds=3)
     """
     if duration_string is None or pd.isna(duration_string):
         return Duration()
 
     try:
-        # 如果是数字类型（整数或浮点数），直接转换为秒
+        # If it's a numeric type (int or float), convert directly to seconds
         if isinstance(duration_string, (int, float)):
             total_seconds = int(duration_string)
             hours = total_seconds // 3600
@@ -123,7 +123,7 @@ def parse_duration(duration_string):
             seconds = total_seconds % 60
             return Duration(hours=hours, minutes=minutes, seconds=seconds)
         
-        # 如果是字符串，尝试按时:分:秒格式解析
+        # If it's a string, try to parse as HH:MM:SS format
         if isinstance(duration_string, str):
             parts = duration_string.split(':')
             if len(parts) == 3:  # HH:MM:SS
@@ -137,21 +137,21 @@ def parse_duration(duration_string):
                     seconds = int(float(parts[0]))
                     return Duration(seconds=seconds)
                 except ValueError:
-                    print(f"警告: 无法解析时长格式 '{duration_string}'")
+                    print(f"Warning: Unable to parse duration format '{duration_string}'")
                     return Duration()
     except (ValueError, TypeError) as e:
-        print(f"警告: 无法解析时长 '{duration_string}': {str(e)}")
+        print(f"Warning: Unable to parse duration '{duration_string}': {str(e)}")
         return Duration()
     
     return Duration()
 
 def search_youtube(search_query: str, max_results: int = 500) -> pd.DataFrame:
     """
-    在YouTube上搜索视频
+    Search videos on YouTube
     """
     print(f"Searching YouTube for: '{search_query}'")
     
-    # 处理包含hashtag的关键词
+    # Handle keywords with hashtags
     if search_query.startswith('#'):
         search_query = search_query[1:]
     
@@ -174,7 +174,7 @@ def search_youtube(search_query: str, max_results: int = 500) -> pd.DataFrame:
                 capture_output=True, 
                 text=True, 
                 check=True, 
-                timeout=120  # 增加整体超时时间到120秒
+                timeout=120  # Increase overall timeout to 120 seconds
             )
             
             if result.stdout.strip():
@@ -185,11 +185,11 @@ def search_youtube(search_query: str, max_results: int = 500) -> pd.DataFrame:
                 ]
                 all_results.extend(raw_data)
                 print(f"Found {len(raw_data)} entries from YouTube search")
-            break  # 成功则退出重试循环
+            break  # Exit retry loop on success
             
         except subprocess.TimeoutExpired:
             print(f"Attempt {attempt+1} timed out")
-            if attempt < 2:  # 如果不是最后一次尝试
+            if attempt < 2:  # If not the last attempt
                 print("Waiting before retry...")
                 time.sleep(5 + (5 * attempt))
             continue
@@ -202,23 +202,23 @@ def search_youtube(search_query: str, max_results: int = 500) -> pd.DataFrame:
             continue
             
         except json.JSONDecodeError as e:
-            print(f"JSON解析错误: {str(e)}")
+            print(f"JSON parsing error: {str(e)}")
             continue
             
         except Exception as e:
-            print(f"未预期的错误: {str(e)}")
+            print(f"Unexpected error: {str(e)}")
             break
     
     if all_results:
         df = pd.DataFrame(all_results)
-        df['platform'] = 'youtube'  # 添加平台信息
+        df['platform'] = 'youtube'  # Add platform information
         print(f"Successfully collected {len(df)} total entries")
         return df
     return pd.DataFrame()
 
 def run_platform_search(search_query: str, platform: str, max_results: int = 500) -> pd.DataFrame:
     """
-    在指定平台上搜索视频
+    Search videos on specified platform
     """
     if platform == 'youtube':
         return search_youtube(search_query, max_results)
@@ -229,21 +229,21 @@ def run_platform_search(search_query: str, platform: str, max_results: int = 500
     return pd.DataFrame()
 
 def main():
-    parser = argparse.ArgumentParser(description='收集第一人称工具使用视频数据集的元数据')
+    parser = argparse.ArgumentParser(description='Collect metadata for first-person tool usage video dataset')
     parser.add_argument('--output', type=str, default='datasets',
-                        help='输出目录')
+                        help='Output directory')
     parser.add_argument('--max_results', type=int, default=1000,
-                        help='每个关键词搜索的最大结果数')
+                        help='Maximum number of results per keyword search')
     parser.add_argument('--platforms', type=str, default='youtube',
-                        help='要搜索的平台，用逗号分隔。支持：youtube,bilibili,tiktok')
+                        help='Platforms to search, comma-separated. Supported: youtube,bilibili,tiktok')
     args = parser.parse_args()
 
-    # 创建输出目录
+    # Create output directory
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir = os.path.join(args.output, timestamp)
     os.makedirs(output_dir, exist_ok=True)
 
-    # 搜索关键词列表
+    # Search keywords list
     KEYWORDS = {
         "POV tool usage",
         #"egocentric tool usage",
@@ -262,45 +262,49 @@ def main():
         #"first person making"
     }
 
-    # 处理平台参数
+    # Process platform arguments
     platforms = [p.strip().lower() for p in args.platforms.split(',')]
     valid_platforms = ['youtube', 'bilibili', 'tiktok']
     platforms = [p for p in platforms if p in valid_platforms]
     
     if not platforms:
-        print("没有指定有效的平台，默认使用YouTube")
+        print("No valid platforms specified, defaulting to YouTube")
         platforms = ['youtube']
     
-    print(f"将在以下平台搜索: {', '.join(platforms)}")
+    print(f"Will search on the following platforms: {', '.join(platforms)}")
     
-    # 创建metadata文件
+    # Create metadata file
     metadata_path = os.path.join(output_dir, "metadata.csv")
-    total_duration = Duration()  # 初始化为Duration对象
+    total_duration = Duration()  # Initialize as Duration object
     total_videos = 0
     platform_stats = {p: {'videos': 0, 'duration': Duration()} for p in platforms}
     
-    # 创建一个空的DataFrame来存储所有元数据
+    # Create an empty DataFrame to store all metadata
     columns = ['id', 'title', 'description', 'duration_string', 'search_keyword', 'platform']
     final_df = pd.DataFrame(columns=columns)
     final_df.to_csv(metadata_path, index=False)
     
-    for kw in tqdm(KEYWORDS, desc="搜索关键词"):
+    for kw in tqdm(KEYWORDS, desc="Searching keywords"):
         for platform in platforms:
-            print(f"\n在 {platform} 上搜索: {kw}")
+            print(f"\nSearching on {platform} for: {kw}")
             df = run_platform_search(kw, platform, max_results=args.max_results)
             if not df.empty:
-                # 筛选并处理数据
-                # 首先确保所有必要的列都存在
+                # Filter and process data
+                # First ensure all necessary columns exist
                 df_filtered = df.copy()
                 
-                # 添加或保留必要的列
-                df_filtered['platform'] = platform  # 使用当前平台
-                df_filtered['search_keyword'] = kw  # 使用当前搜索关键词
+                                # Filter and process data
+                # First ensure all necessary columns exist
+                df_filtered = df.copy()
                 
-                # 选择最终需要的列，按照指定的顺序
+                # Add or retain necessary columns
+                df_filtered['platform'] = platform  # Use current platform
+                df_filtered['search_keyword'] = kw  # Use current search keyword
+                
+                # Select final required columns in specified order
                 df_filtered = df_filtered[['id', 'title', 'description', 'duration_string', 'search_keyword', 'platform']]
                 
-                # 计算新增视频的时长
+                # Calculate duration of new videos
                 new_videos = df_filtered[~df_filtered['id'].isin(final_df['id'])]
                 
                 if not new_videos.empty:
@@ -308,32 +312,32 @@ def main():
                     for d in new_videos['duration_string']:
                         new_duration = new_duration + parse_duration(d)
                 
-                # 更新总计数据
+                # Update total statistics
                 total_duration = total_duration + new_duration
                 total_videos += len(new_videos)
                 
-                # 更新平台统计
-                curr_platform = new_videos['platform'].iloc[0]  # 获取当前平台
+                # Update platform statistics
+                curr_platform = new_videos['platform'].iloc[0]  # Get current platform
                 platform_stats[curr_platform]['videos'] += len(new_videos)
                 platform_stats[curr_platform]['duration'] = platform_stats[curr_platform]['duration'] + new_duration
                 
-                # 将新数据追加到CSV文件
+                # Append new data to CSV file
                 new_videos.to_csv(metadata_path, mode='a', header=False, index=False)
                 
-                # 更新内存中的DataFrame
+                # Update DataFrame in memory
                 final_df = pd.concat([final_df, new_videos], ignore_index=True)
                 
-                print(f"\n平台 '{curr_platform}' 关键词 '{kw}' 新增 {len(new_videos)} 个视频，总时长 {new_duration}")
-                print(f"当前平台共计 {platform_stats[curr_platform]['videos']} 个视频，"
-                      f"总时长 {platform_stats[curr_platform]['duration']}")
-                print(f"所有平台共计 {total_videos} 个视频，总时长 {total_duration}")
+                print(f"\nPlatform '{curr_platform}' keyword '{kw}' added {len(new_videos)} videos, total duration {new_duration}")
+                print(f"Current platform total {platform_stats[curr_platform]['videos']} videos, "
+                      f"total duration {platform_stats[curr_platform]['duration']}")
+                print(f"All platforms total {total_videos} videos, total duration {total_duration}")
     
-    print("\n=== 最终统计 ===")
-    print(f"总视频数: {total_videos}")
-    print(f"总时长: {total_duration}")
-    print("\n各平台统计:")
+    print("\n=== Final Statistics ===")
+    print(f"Total videos: {total_videos}")
+    print(f"Total duration: {total_duration}")
+    print("\nStatistics by platform:")
     for platform, stats in platform_stats.items():
-        print(f"{platform}: {stats['videos']} 个视频，总时长 {stats['duration']}")
+        print(f"{platform}: {stats['videos']} videos, total duration {stats['duration']}")
 
 if __name__ == "__main__":
     main()
