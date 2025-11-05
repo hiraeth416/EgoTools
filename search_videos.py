@@ -245,20 +245,21 @@ def main():
 
     # 搜索关键词列表
     KEYWORDS = {
-        "egocentric tool usage",
-        "first person view DIY",
-        "POV crafting tutorial",
-        "first person woodworking",
-        "POV cooking techniques",
-        "first person tool demonstration",
-        "egocentric view workshop",
-        "POV handcraft tutorial",
-        "hands on tutorial tools",
-        "POV maker tutorial",
-        "first person crafting",
-        "egocentric DIY",
-        "POV tools hands",
-        "first person making"
+        "POV tool usage",
+        #"egocentric tool usage",
+        #"first person view DIY",
+        #"POV crafting tutorial",
+        #"first person woodworking",
+        #"POV cooking techniques",
+        #"first person tool demonstration",
+        #"egocentric view workshop",
+        #"POV handcraft tutorial",
+        #"hands on tutorial tools",
+        #"POV maker tutorial",
+        #"first person crafting",
+        #"egocentric DIY",
+        #"POV tools hands",
+        #"first person making"
     }
 
     # 处理平台参数
