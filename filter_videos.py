@@ -1,435 +1,415 @@
-import cv2
-import numpy as np
-import os
+"""
+Use Qwen3-VL model to analyze whether videos are first-person perspective tool usage videos
+and identify segments where hands and tools appear together in the frame
+"""
 import pandas as pd
+import torch
+from transformers import AutoModelForImageTextToText, AutoProcessor
+import json
+import os
+from datetime import datetime
 from pathlib import Path
 import argparse
-import base64
-import json
-from typing import List, Tuple, Optional
-import torch
-from transformers import Qwen3VLForConditionalGeneration, AutoProcessor
-from qwen_vl_utils import process_vision_info
-from PIL import Image
-import io
 
-class VideoFilter:
-    def __init__(self, model_name: str = "Qwen/Qwen3-VL-235B-A22B-Instruct"):
-        """
-        Initialize video filter with Qwen3-VL model
-        Args:
-            model_name: Name or path of the Qwen3-VL model
-        """
-        print(f"Loading Qwen3-VL model: {model_name}")
 
-        # Load model and processor
-        self.model = Qwen3VLForConditionalGeneration.from_pretrained(
-            model_name,
-            torch_dtype=torch.bfloat16,
-            device_map="auto"
-        )
+class QwenVideoAnalyzer:
+    def __init__(self, model_name="Qwen/Qwen3-VL-2B-Instruct", use_flash_attention=False):
+        """Initialize Qwen3-VL model"""
+        print(f"Loading model: {model_name}")
+        
+        if use_flash_attention:
+            self.model = AutoModelForImageTextToText.from_pretrained(
+                model_name,
+                dtype=torch.bfloat16,
+                attn_implementation="flash_attention_2",
+                device_map="auto",
+            )
+        else:
+            self.model = AutoModelForImageTextToText.from_pretrained(
+                model_name, 
+                dtype="auto", 
+                device_map="auto"
+            )
+        
         self.processor = AutoProcessor.from_pretrained(model_name)
-        
         print("Model loaded successfully")
-
-    def frame_to_base64(self, frame):
-        """Convert OpenCV frame to base64 string"""
-        # Convert BGR to RGB
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        # Convert to PIL Image
-        pil_image = Image.fromarray(frame_rgb)
-        # Convert to base64
-        buffered = io.BytesIO()
-        pil_image.save(buffered, format="JPEG")
-        img_str = base64.b64encode(buffered.getvalue()).decode()
-        return f"data:image/jpeg;base64,{img_str}"
-
-    def analyze_frame(self, frame) -> dict:
+    
+    def scan_download_directory(self, download_dir):
         """
-        Analyze a single frame using Qwen3-VL model
+        Scan download directory and find all videos
+        Returns list of video info dicts with video_id, platform, and video_path
+        """
+        download_path = Path(download_dir)
+        if not download_path.exists():
+            raise FileNotFoundError(f"Download directory not found: {download_dir}")
+        
+        videos = []
+        video_extensions = ['.mp4', '.webm', '.mkv', '.avi', '.mov']
+        
+        # Scan platform directories (youtube, bilibili, tiktok, etc.)
+        for platform_dir in download_path.iterdir():
+            if not platform_dir.is_dir():
+                continue
+            
+            platform = platform_dir.name
+            
+            # Scan video ID directories
+            for video_dir in platform_dir.iterdir():
+                if not video_dir.is_dir():
+                    continue
+                
+                video_id = video_dir.name
+                
+                # Find video file
+                for ext in video_extensions:
+                    video_files = list(video_dir.glob(f"*{ext}"))
+                    if video_files:
+                        video_path = str(video_files[0])
+                        # Try to extract title from filename
+                        title = video_files[0].stem.replace(f"-{video_id}", "")
+                        
+                        videos.append({
+                            'video_id': video_id,
+                            'platform': platform,
+                            'video_path': video_path,
+                            'title': title
+                        })
+                        break
+        
+        return videos
+    
+    def analyze_video(self, video_path, analysis_type="full"):
+        """
+        Analyze video
+        
+        Args:
+            video_path: Video file path (local path or URL)
+            analysis_type: Analysis type ("full", "pov_check", "hand_tool_segments")
+        
         Returns:
-            dict with keys: is_first_person, has_hand, has_tool, description
+            Analysis result
         """
-        # Convert frame to base64
-        image_base64 = self.frame_to_base64(frame)
-        
-        # Prepare prompt
-        prompt = """Analyze this image and answer the following questions:
-1. Is this a first-person view (egocentric perspective)? 
-2. Are there human hands visible in the image?
-3. Are there any tools being used or held?
-4. If yes to questions 2 and 3, describe what tool is being used and what action is being performed.
-
-Please respond in JSON format:
-{
-    "is_first_person": true/false,
-    "has_hand": true/false,
-    "has_tool": true/false,
-    "tool_name": "name of tool or null",
-    "description": "brief description of the scene"
-}"""
-        
-        # Prepare messages for the model
+        if analysis_type == "full":
+            return self._full_analysis(video_path)
+        elif analysis_type == "pov_check":
+            return self._check_first_person_pov(video_path)
+        elif analysis_type == "hand_tool_segments":
+            return self._detect_hand_tool_segments(video_path)
+    
+    def _full_analysis(self, video_path):
+        """Full analysis: check both first-person perspective and hand-tool segments"""
         messages = [
             {
                 "role": "user",
                 "content": [
-                    {"type": "image", "image": image_base64},
-                    {"type": "text", "text": prompt}
-                ]
+                    {
+                        "type": "video",
+                        "video": video_path,
+                    },
+                    {
+                        "type": "text", 
+                        "text": """Please analyze this video and answer the following questions:
+1. Is this video shot from a first-person perspective (POV/First-person perspective)?
+2. Is there someone using tools in the video?
+3. If tools are being used, please describe in detail the time periods (in seconds) where both hands and tools appear in the frame.
+
+Please return the result in JSON format with the following fields:
+{
+  "is_first_person": true/false,
+  "has_tool_usage": true/false,
+  "confidence": "high/medium/low",
+  "tool_description": "Description of the tools used",
+  "hand_tool_segments": [
+    {"start_time": 0, "end_time": 10, "description": "Description of actions in this segment"},
+    ...
+  ],
+  "reasoning": "Reasoning for the judgment"
+}"""
+                    },
+                ],
             }
         ]
         
-        # Prepare for inference
-        text = self.processor.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
-        image_inputs, video_inputs = process_vision_info(messages)
-        inputs = self.processor(
-            text=[text],
-            images=image_inputs,
-            videos=video_inputs,
-            padding=True,
+        return self._generate_response(messages)
+    
+    def _check_first_person_pov(self, video_path):
+        """Check if it's first-person perspective"""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "video",
+                        "video": video_path,
+                    },
+                    {
+                        "type": "text", 
+                        "text": """Please determine if this video is shot from a first-person perspective (First-person perspective/POV).
+Characteristics of first-person perspective include:
+- Viewing from the photographer's eye perspective
+- Usually showing the photographer's own hands or body parts
+- Camera moves with the photographer's head/body movement
+
+Please answer:
+1. Is it first-person perspective? (Yes/No)
+2. Confidence level (High/Medium/Low)
+3. Reasoning for judgment
+
+Please return in JSON format: {"is_first_person": true/false, "confidence": "high/medium/low", "reasoning": "reason"}"""
+                    },
+                ],
+            }
+        ]
+        
+        return self._generate_response(messages)
+    
+    def _detect_hand_tool_segments(self, video_path):
+        """Detect segments where hands and tools appear together"""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "video",
+                        "video": video_path,
+                    },
+                    {
+                        "type": "text", 
+                        "text": """Please carefully observe this video and identify all time periods where human hands and tools appear together in the frame.
+                                For each such segment, please provide:
+                                1. Start time (seconds)
+                                2. End time (seconds)
+                                3. Brief description (tools used and actions performed)
+
+                                Please return in JSON format:
+                                {
+                                  "segments": [
+                                    {"start_time": 0, "end_time": 5, "tool": "tool name", "action": "action description"},
+                                    ...
+                                  ],
+                                  "total_segments": count
+                                }"""
+                    },
+                ],
+            }
+        ]
+        
+        return self._generate_response(messages)
+    
+    def _generate_response(self, messages, max_new_tokens=512):
+        """Generate model response"""
+        inputs = self.processor.apply_chat_template(
+            messages,
+            tokenize=True,
+            add_generation_prompt=True,
+            return_dict=True,
             return_tensors="pt"
         )
         inputs = inputs.to(self.model.device)
         
-        # Generate response
-        with torch.no_grad():
-            generated_ids = self.model.generate(**inputs, max_new_tokens=256)
-            generated_ids_trimmed = [
-                out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
-            ]
-            output_text = self.processor.batch_decode(
-                generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
-            )[0]
-        
-        # Parse JSON response
-        try:
-            # Try to extract JSON from the response
-            start_idx = output_text.find('{')
-            end_idx = output_text.rfind('}') + 1
-            if start_idx != -1 and end_idx > start_idx:
-                json_str = output_text[start_idx:end_idx]
-                result = json.loads(json_str)
-            else:
-                # Fallback: create default response
-                result = {
-                    "is_first_person": False,
-                    "has_hand": False,
-                    "has_tool": False,
-                    "tool_name": None,
-                    "description": output_text
-                }
-        except json.JSONDecodeError:
-            # If JSON parsing fails, create a default response
-            result = {
-                "is_first_person": False,
-                "has_hand": False,
-                "has_tool": False,
-                "tool_name": None,
-                "description": output_text
-            }
-        
-        return result
-
-    def process_video(self, video_path, output_path=None, save_clips=True, sample_interval=30):
-        """
-        Process video and extract valid segments where hands and tools appear together
-        Args:
-            video_path: Path to the video file
-            output_path: Directory to save video segments
-            save_clips: Whether to save the extracted segments
-            sample_interval: Sample one frame every N frames (default: 30, i.e., 1 per second at 30fps)
-        Returns:
-            dict with video analysis results and valid segments
-        """
-        cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            print(f"Error opening video: {video_path}")
-            return None
-        
-        fps = int(cap.get(cv2.CAP_PROP_FPS))
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        
-        print(f"Processing video: {video_path}")
-        print(f"Total frames: {total_frames}, FPS: {fps}, Duration: {total_frames/fps:.2f}s")
-        
-        # Store analysis results
-        frame_analyses = []
-        valid_segments = []
-        segment_start = None
-        segment_analyses = []
-        
-        # Video-level statistics
-        first_person_count = 0
-        hand_count = 0
-        tool_count = 0
-        hand_and_tool_count = 0
-        
-        frame_count = 0
-        sampled_count = 0
-        
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if not ret:
-                break
-                
-            # Sample frames at specified interval
-            if frame_count % sample_interval == 0:
-                sampled_count += 1
-                print(f"Analyzing frame {frame_count}/{total_frames} ({sampled_count} sampled frames)...")
-                
-                # Analyze frame with Qwen3-VL
-                analysis = self.analyze_frame(frame)
-                analysis['frame_number'] = frame_count
-                analysis['timestamp'] = frame_count / fps
-                frame_analyses.append(analysis)
-                
-                # Update statistics
-                if analysis.get('is_first_person', False):
-                    first_person_count += 1
-                if analysis.get('has_hand', False):
-                    hand_count += 1
-                if analysis.get('has_tool', False):
-                    tool_count += 1
-                if analysis.get('has_hand', False) and analysis.get('has_tool', False):
-                    hand_and_tool_count += 1
-                    
-                    # Start a new segment or continue current one
-                    if segment_start is None:
-                        segment_start = frame_count
-                        segment_analyses = [analysis]
-                    else:
-                        segment_analyses.append(analysis)
-                else:
-                    # End current segment if it exists
-                    if segment_start is not None:
-                        valid_segments.append({
-                            'start_frame': segment_start,
-                            'end_frame': frame_count,
-                            'start_time': segment_start / fps,
-                            'end_time': frame_count / fps,
-                            'duration': (frame_count - segment_start) / fps,
-                            'analyses': segment_analyses
-                        })
-                        segment_start = None
-                        segment_analyses = []
-            
-            frame_count += 1
-        
-        # Process the last segment
-        if segment_start is not None:
-            valid_segments.append({
-                'start_frame': segment_start,
-                'end_frame': frame_count,
-                'start_time': segment_start / fps,
-                'end_time': frame_count / fps,
-                'duration': (frame_count - segment_start) / fps,
-                'analyses': segment_analyses
-            })
-        
-        cap.release()
-        
-        # Calculate video-level metrics
-        is_first_person_video = (first_person_count / max(sampled_count, 1)) > 0.5
-        has_tool_usage = tool_count > 0
-        
-        results = {
-            'video_path': video_path,
-            'is_first_person': is_first_person_video,
-            'has_tool_usage': has_tool_usage,
-            'total_frames': total_frames,
-            'sampled_frames': sampled_count,
-            'fps': fps,
-            'duration': total_frames / fps,
-            'first_person_ratio': first_person_count / max(sampled_count, 1),
-            'hand_ratio': hand_count / max(sampled_count, 1),
-            'tool_ratio': tool_count / max(sampled_count, 1),
-            'hand_and_tool_ratio': hand_and_tool_count / max(sampled_count, 1),
-            'valid_segments': valid_segments,
-            'frame_analyses': frame_analyses
-        }
-        
-        # Save segments
-        if save_clips and output_path and valid_segments:
-            self.save_video_segments(video_path, valid_segments, output_path)
-        
-        return results
-
-    def save_video_segments(self, video_path, segments, output_dir):
-        """
-        Save video segments to specified directory
-        Args:
-            video_path: Path to source video
-            segments: List of segment dicts with start_frame, end_frame, etc.
-            output_dir: Directory to save segments
-        """
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
-            
-        cap = cv2.VideoCapture(video_path)
-        fps = int(cap.get(cv2.CAP_PROP_FPS))
-        frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        
-        for i, segment in enumerate(segments):
-            start_frame = segment['start_frame']
-            end_frame = segment['end_frame']
-            
-            output_path = os.path.join(
-                output_dir, 
-                f"{Path(video_path).stem}_segment_{i}_{segment['start_time']:.1f}s-{segment['end_time']:.1f}s.mp4"
-            )
-            
-            print(f"Saving segment {i+1}/{len(segments)}: {output_path}")
-            
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            out = cv2.VideoWriter(output_path, fourcc, fps, (frame_width, frame_height))
-            
-            cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-            for _ in range(end_frame - start_frame):
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                out.write(frame)
-            
-            out.release()
-            
-            # Save segment metadata
-            metadata_path = output_path.replace('.mp4', '_metadata.json')
-            with open(metadata_path, 'w') as f:
-                json.dump({
-                    'start_frame': start_frame,
-                    'end_frame': end_frame,
-                    'start_time': segment['start_time'],
-                    'end_time': segment['end_time'],
-                    'duration': segment['duration'],
-                    'analyses': segment['analyses']
-                }, f, indent=2)
-        
-        cap.release()
-
-def main():
-    parser = argparse.ArgumentParser(description='Filter videos based on hand and tool detection using Qwen3-VL')
-    parser.add_argument('--csv_path', type=str, required=True, help='Path to metadata.csv file')
-    parser.add_argument('--video_dir', type=str, required=True, help='Directory containing downloaded videos')
-    parser.add_argument('--output_dir', type=str, required=True, help='Output directory for filtered video segments')
-    parser.add_argument('--model_name', type=str, default='Qwen/Qwen3-VL-7B-Instruct', 
-                        help='Qwen3-VL model name or path')
-    parser.add_argument('--sample_interval', type=int, default=30, 
-                        help='Sample one frame every N frames (default: 30)')
-    parser.add_argument('--save_clips', action='store_true', 
-                        help='Save video segments where hands and tools appear together')
-    args = parser.parse_args()
-
-    # Load metadata
-    print(f"Loading metadata from {args.csv_path}")
-    metadata_df = pd.read_csv(args.csv_path)
-    print(f"Found {len(metadata_df)} videos in metadata")
-    
-    # Initialize video filter with Qwen3-VL
-    video_filter = VideoFilter(model_name=args.model_name)
-    
-    # Create output directory
-    os.makedirs(args.output_dir, exist_ok=True)
-    
-    # Process each video
-    all_results = []
-    
-    for idx, row in metadata_df.iterrows():
-        video_id = row['id']
-        platform = row.get('platform', 'youtube')
-        
-        # Construct video path
-        video_path = os.path.join(args.video_dir, platform, video_id)
-        
-        # Find the video file in the directory
-        if os.path.isdir(video_path):
-            video_files = [f for f in os.listdir(video_path) if f.endswith(('.mp4', '.webm', '.mkv'))]
-            if not video_files:
-                print(f"No video file found in {video_path}")
-                continue
-            video_file = os.path.join(video_path, video_files[0])
-        else:
-            print(f"Video directory not found: {video_path}")
-            continue
-        
-        print(f"\n{'='*80}")
-        print(f"Processing [{idx+1}/{len(metadata_df)}]: {row.get('title', video_id)}")
-        print(f"Video ID: {video_id}")
-        print(f"{'='*80}")
-        
-        # Create output folder for this video
-        output_folder = os.path.join(args.output_dir, platform, video_id)
-        os.makedirs(output_folder, exist_ok=True)
-        
-        # Process video
-        result = video_filter.process_video(
-            video_file,
-            output_folder,
-            save_clips=args.save_clips,
-            sample_interval=args.sample_interval
+        # Generate output
+        generated_ids = self.model.generate(**inputs, max_new_tokens=max_new_tokens)
+        generated_ids_trimmed = [
+            out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
+        ]
+        output_text = self.processor.batch_decode(
+            generated_ids_trimmed, 
+            skip_special_tokens=True, 
+            clean_up_tokenization_spaces=False
         )
         
-        if result:
-            # Add metadata to result
-            result['video_id'] = video_id
-            result['platform'] = platform
-            result['title'] = row.get('title', '')
+        return output_text[0] if output_text else ""
+
+
+def process_videos(download_dir="download", output_dir=None, use_flash_attention=False):
+    """
+    Process all videos in download directory
+    
+    Args:
+        download_dir: Local video download directory (default: "download/")
+        output_dir: Output directory
+        use_flash_attention: Whether to use flash attention
+    """
+    # Initialize analyzer
+    analyzer = QwenVideoAnalyzer(use_flash_attention=use_flash_attention)
+    
+    # Scan download directory for videos
+    print(f"Scanning directory: {download_dir}")
+    videos = analyzer.scan_download_directory(download_dir)
+    print(f"Found {len(videos)} videos to analyze")
+    
+    if not videos:
+        print("No videos found in download directory")
+        return
+    
+    # Show video statistics
+    platforms = {}
+    for video in videos:
+        platform = video['platform']
+        platforms[platform] = platforms.get(platform, 0) + 1
+    
+    print("\nVideos by platform:")
+    for platform, count in platforms.items():
+        print(f"  {platform}: {count} videos")
+    
+    # Prepare output directory
+    if output_dir is None:
+        output_dir = Path(download_dir).parent / f"qwen_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Store results
+    results = []
+    
+    # Process each video
+    for idx, video_info in enumerate(videos):
+        video_id = video_info['video_id']
+        platform = video_info['platform']
+        title = video_info['title']
+        video_path = video_info['video_path']
+        
+        print(f"\n[{idx+1}/{len(videos)}] Analyzing video: {video_id}")
+        print(f"Platform: {platform}")
+        print(f"Title: {title}")
+        print(f"Path: {video_path}")
+        
+        try:
+            # Execute full analysis
+            print("Analyzing...")
+            analysis_result = analyzer.analyze_video(video_path, analysis_type="full")
             
-            all_results.append({
+            print(f"Analysis result:\n{analysis_result}")
+            
+            # Try to parse JSON result
+            try:
+                # Try to extract JSON from output
+                if "{" in analysis_result and "}" in analysis_result:
+                    json_start = analysis_result.find("{")
+                    json_end = analysis_result.rfind("}") + 1
+                    json_str = analysis_result[json_start:json_end]
+                    parsed_result = json.loads(json_str)
+                else:
+                    parsed_result = {"raw_response": analysis_result}
+            except json.JSONDecodeError:
+                parsed_result = {"raw_response": analysis_result}
+            
+            # Save result
+            result = {
                 'video_id': video_id,
                 'platform': platform,
-                'title': row.get('title', ''),
-                'is_first_person': result['is_first_person'],
-                'has_tool_usage': result['has_tool_usage'],
-                'duration': result['duration'],
-                'first_person_ratio': result['first_person_ratio'],
-                'hand_ratio': result['hand_ratio'],
-                'tool_ratio': result['tool_ratio'],
-                'hand_and_tool_ratio': result['hand_and_tool_ratio'],
-                'num_segments': len(result['valid_segments']),
-                'total_segment_duration': sum(seg['duration'] for seg in result['valid_segments'])
-            })
+                'title': title,
+                'video_path': video_path,
+                'analysis': parsed_result,
+                'raw_output': analysis_result,
+                'timestamp': datetime.now().isoformat()
+            }
+            results.append(result)
             
-            # Save detailed results for this video
-            result_file = os.path.join(output_folder, 'analysis_result.json')
-            with open(result_file, 'w') as f:
-                json.dump(result, f, indent=2)
+            # Save individual video's detailed result
+            video_output_file = output_dir / f"{video_id}_analysis.json"
+            with open(video_output_file, 'w', encoding='utf-8') as f:
+                json.dump(result, f, ensure_ascii=False, indent=2)
             
-            print(f"\nResults:")
-            print(f"  First-person video: {result['is_first_person']}")
-            print(f"  Has tool usage: {result['has_tool_usage']}")
-            print(f"  Valid segments with hands + tools: {len(result['valid_segments'])}")
-            if result['valid_segments']:
-                total_duration = sum(seg['duration'] for seg in result['valid_segments'])
-                print(f"  Total segment duration: {total_duration:.2f}s")
+        except Exception as e:
+            print(f"Error: {e}")
+            result = {
+                'video_id': video_id,
+                'platform': platform,
+                'title': title,
+                'video_path': video_path,
+                'error': str(e),
+                'timestamp': datetime.now().isoformat()
+            }
+            results.append(result)
     
     # Save summary results
-    if all_results:
-        results_df = pd.DataFrame(all_results)
+    summary_file = output_dir / "analysis_summary.json"
+    with open(summary_file, 'w', encoding='utf-8') as f:
+        json.dump(results, f, ensure_ascii=False, indent=2)
+    
+    # Create summary CSV
+    summary_data = []
+    for result in results:
+        row_data = {
+            'video_id': result['video_id'],
+            'title': result.get('title', ''),
+            'video_path': result.get('video_path', ''),
+        }
         
-        # Save filtered videos (first-person with tool usage)
-        filtered_df = results_df[results_df['is_first_person'] & results_df['has_tool_usage']]
+        if 'analysis' in result and isinstance(result['analysis'], dict):
+            row_data['is_first_person'] = result['analysis'].get('is_first_person', None)
+            row_data['has_tool_usage'] = result['analysis'].get('has_tool_usage', None)
+            row_data['confidence'] = result['analysis'].get('confidence', None)
+            row_data['tool_description'] = result['analysis'].get('tool_description', '')
+            row_data['num_hand_tool_segments'] = len(result['analysis'].get('hand_tool_segments', []))
+            row_data['reasoning'] = result['analysis'].get('reasoning', '')
+        else:
+            row_data['error'] = result.get('error', '')
         
-        summary_path = os.path.join(args.output_dir, 'analysis_summary.csv')
-        results_df.to_csv(summary_path, index=False)
-        print(f"\n{'='*80}")
-        print(f"Analysis complete!")
-        print(f"Total videos processed: {len(results_df)}")
-        print(f"First-person videos: {results_df['is_first_person'].sum()}")
-        print(f"Videos with tool usage: {results_df['has_tool_usage'].sum()}")
-        print(f"First-person videos with tool usage: {len(filtered_df)}")
-        print(f"Summary saved to: {summary_path}")
+        summary_data.append(row_data)
+    
+    summary_df = pd.DataFrame(summary_data)
+    summary_csv = output_dir / "analysis_summary.csv"
+    summary_df.to_csv(summary_csv, index=False, encoding='utf-8')
+    
+    print(f"\nAnalysis complete!")
+    print(f"Results saved in: {output_dir}")
+    print(f"- Detailed JSON: analysis_summary.json")
+    print(f"- Summary CSV: analysis_summary.csv")
+    print(f"- Individual video results: *_analysis.json")
+    
+    return results, summary_df
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Analyze videos using Qwen3-VL')
+    parser.add_argument('--download-dir', type=str, default='download', help='Local video download directory (default: download/)')
+    parser.add_argument('--output-dir', type=str, default='output_results', help='Output directory')
+    parser.add_argument('--flash-attention', action='store_true', help='Use flash attention 2')
+    parser.add_argument('--single-video', type=str, default=None, help='Analyze only a single video ID (format: platform/video_id)')
+    
+    args = parser.parse_args()
+    
+    if args.single_video:
+        # Single video analysis mode
+        analyzer = QwenVideoAnalyzer(use_flash_attention=args.flash_attention)
         
-        # Save filtered list
-        if len(filtered_df) > 0:
-            filtered_path = os.path.join(args.output_dir, 'filtered_first_person_tool_videos.csv')
-            filtered_df.to_csv(filtered_path, index=False)
-            print(f"Filtered list saved to: {filtered_path}")
+        # Parse platform/video_id format
+        if '/' in args.single_video:
+            platform, video_id = args.single_video.split('/', 1)
+        else:
+            # Default to youtube if no platform specified
+            platform = 'youtube'
+            video_id = args.single_video
+        
+        # Find video file
+        video_dir = Path(args.download_dir) / platform / video_id
+        if not video_dir.exists():
+            print(f"Error: Video directory not found: {video_dir}")
+            return
+        
+        video_extensions = ['.mp4', '.webm', '.mkv', '.avi', '.mov']
+        video_path = None
+        for ext in video_extensions:
+            video_files = list(video_dir.glob(f"*{ext}"))
+            if video_files:
+                video_path = str(video_files[0])
+                break
+        
+        if not video_path:
+            print(f"Error: No video file found in {video_dir}")
+            return
+        
+        print(f"Analyzing video: {video_id}")
+        print(f"Platform: {platform}")
+        print(f"Path: {video_path}")
+        
+        result = analyzer.analyze_video(video_path, analysis_type="full")
+        print(f"\nAnalysis result:\n{result}")
+    else:
+        # Batch analysis mode
+        process_videos(args.download_dir, args.output_dir, args.flash_attention)
+
 
 if __name__ == "__main__":
     main()

@@ -25,12 +25,14 @@ EgoTools provides a complete pipeline for:
 - Automatic metadata and thumbnail extraction
 - Each video saved in separate folder by ID
 
-### Intelligent Video Analysis (Qwen2-VL)
+### Intelligent Video Analysis (Qwen3-VL)
 - **First-Person Detection**: Identifies egocentric perspective videos
-- **Tool Detection**: Detects tools being used in videos
+- **Tool Detection**: Detects tools being used in videos  
 - **Hand Detection**: Identifies presence of human hands
+- **Activity Recognition**: Describes activities and actions being performed
+- **Tool Identification**: Lists specific tools detected in the video
 - **Segment Extraction**: Extracts clips where hands and tools appear together
-- **Detailed Analysis**: Frame-by-frame analysis with tool names and descriptions
+- **Whole Video Analysis**: Analyzes entire videos using advanced vision-language model
 
 ## Installation
 
@@ -40,11 +42,14 @@ EgoTools provides a complete pipeline for:
 # Core dependencies
 pip install pandas tqdm yt-dlp
 
-# For video filtering and analysis
-pip install torch transformers opencv-python pillow qwen-vl-utils
+# For video filtering and analysis (Qwen3-VL)
+pip install torch transformers opencv-python pillow
 ```
 
-**Note**: Video analysis requires a GPU with sufficient VRAM (recommended: 16GB+ for the 7B model).
+**Note**: Video analysis requires a GPU with sufficient VRAM:
+- Qwen2-VL-2B: ~8GB VRAM (recommended for testing)
+- Qwen2-VL-7B: ~16GB VRAM (good balance)
+- Qwen3-VL models: Check model card for requirements
 
 ## Quick Start
 
@@ -138,7 +143,7 @@ download/
 
 ### 3. Video Filtering and Analysis (`filter_videos.py`)
 
-Analyze videos using Qwen2-VL model to identify first-person tool usage and extract relevant segments.
+Analyze videos using Qwen3-VL model to identify first-person tool usage and extract relevant segments.
 
 ```bash
 python filter_videos.py \
@@ -146,7 +151,6 @@ python filter_videos.py \
     --video_dir download \
     --output_dir filtered_videos \
     --model_name Qwen/Qwen2-VL-7B-Instruct \
-    --sample_interval 30 \
     --save_clips
 ```
 
@@ -154,9 +158,14 @@ python filter_videos.py \
 - `--csv_path`: Path to metadata.csv file (required)
 - `--video_dir`: Directory containing downloaded videos (required)
 - `--output_dir`: Output directory for analysis results (required)
-- `--model_name`: Qwen2-VL model name or path (default: `Qwen/Qwen2-VL-7B-Instruct`)
-- `--sample_interval`: Sample one frame every N frames (default: 30)
+- `--model_name`: Qwen model name or path (default: `Qwen/Qwen2-VL-7B-Instruct`)
 - `--save_clips`: Save video segments where hands and tools appear together
+
+**Key Improvements with Qwen3-VL:**
+- Analyzes entire videos instead of sampling frames
+- Better understanding of temporal context
+- More accurate tool and activity recognition
+- Natural language descriptions of what's happening
 
 **Output Structure:**
 ```
@@ -166,8 +175,8 @@ filtered_videos/
 └── youtube/
     └── VIDEO_ID/
         ├── analysis_result.json            # Detailed analysis
-        ├── VIDEO_segment_0_2.5s-5.3s.mp4  # Extracted segment
-        └── VIDEO_segment_0_2.5s-5.3s_metadata.json
+        ├── VIDEO_segment_0_0.0s-15.5s.mp4  # Extracted segment
+        └── VIDEO_segment_0_0.0s-15.5s_metadata.json
 ```
 
 **Analysis Output Files:**
@@ -175,16 +184,20 @@ filtered_videos/
 1. **analysis_summary.csv**: Summary statistics for all videos
    - `video_id`, `platform`, `title`
    - `is_first_person`: Boolean for first-person detection
+   - `has_hand`: Boolean for hand detection
    - `has_tool_usage`: Boolean for tool detection
-   - `first_person_ratio`, `hand_ratio`, `tool_ratio`, `hand_and_tool_ratio`
+   - `tools`: Comma-separated list of detected tools
+   - `activities`: Comma-separated list of detected activities
    - `num_segments`: Number of valid segments
    - `total_segment_duration`: Total duration of segments
 
 2. **analysis_result.json**: Detailed per-video analysis
-   - Video metadata (fps, duration, resolution)
-   - Frame-by-frame analysis results
-   - Valid segments with timestamps
-   - Tool names and descriptions
+   - Video metadata (fps, duration, etc.)
+   - Overall classification (is_first_person, has_tool_usage, has_hand)
+   - Tools detected: List of specific tools identified
+   - Activities: List of actions being performed
+   - Description: Natural language summary of video content
+   - Valid segments with timestamps and descriptions
 
 3. **Segment metadata JSON**: For each extracted segment
    - Start/end frame and timestamp
@@ -195,6 +208,8 @@ filtered_videos/
 
 ### Custom Model Selection
 
+### Custom Model Selection
+
 Use a smaller model for faster processing:
 
 ```bash
@@ -202,8 +217,7 @@ python filter_videos.py \
     --csv_path metadata.csv \
     --video_dir download \
     --output_dir filtered_videos \
-    --model_name Qwen/Qwen2-VL-2B-Instruct \
-    --sample_interval 60
+    --model_name Qwen/Qwen2-VL-2B-Instruct
 ```
 
 ### Batch Processing with Partial Downloads
@@ -233,9 +247,9 @@ python download_videos.py \
    - Adjust `--max-workers` based on network bandwidth
    - Use `--max-height 720` for faster downloads
 3. **Analysis**:
-   - Increase `--sample-interval` (e.g., 60) for faster processing
-   - Use smaller models (`Qwen2-VL-2B-Instruct`) for speed
+   - Use smaller models (`Qwen2-VL-2B-Instruct`) for faster processing
    - Monitor GPU memory usage
+   - Process videos in batches to avoid memory issues
 
 ## Troubleshooting
 
@@ -247,10 +261,11 @@ python download_videos.py \
 - **Cookie errors**: Update browser cookies or use `--cookies` flag
 
 **Video Analysis:**
-- **Out of Memory**: Use smaller model or increase `--sample-interval`
-- **Slow processing**: Increase sampling interval or use more powerful GPU
+- **Out of Memory**: Use a smaller model (e.g., `Qwen2-VL-2B-Instruct`)
+- **Slow processing**: Use more powerful GPU or smaller model
 - **Model download fails**: Ensure Hugging Face access and sufficient disk space
 - **Video not found**: Check directory structure: `video_dir/platform/video_id/video.mp4`
+- **Video format issues**: Ensure videos are in supported formats (.mp4, .webm, .mkv)
 
 ## Project Structure
 
@@ -258,7 +273,8 @@ python download_videos.py \
 EgoTools/
 ├── search_videos.py      # Video metadata collection
 ├── download_videos.py    # Video downloader
-├── filter_videos.py      # Video analysis with Qwen2-VL
+├── filter_videos.py      # Video analysis with Qwen3-VL
+├── test_qwen3.py        # Test script for Qwen3-VL
 ├── README.md            # This file
 ├── datasets/            # Search results (timestamped)
 ├── download/            # Downloaded videos
