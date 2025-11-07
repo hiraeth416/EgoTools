@@ -1,0 +1,37 @@
+{
+  "video_id": "3f7p5iDQit0",
+  "platform": "youtube",
+  "title": "POV ｜ DIY New Creative Ideas Tip Make Plastic Bottle  To Tool Use Daily at Kitchen-Trillions Well",
+  "video_path": "/home/sifei/EgoTools/download/youtube/3f7p5iDQit0/POV ｜ DIY New Creative Ideas Tip Make Plastic Bottle  To Tool Use Daily at Kitchen-Trillions Well-3f7p5iDQit0.mp4",
+  "analysis": {
+    "is_first_person": false,
+    "has_tool_usage": true,
+    "confidence": "high",
+    "tool_description": "A red and black utility knife and a pair of scissors are used in the video.",
+    "hand_tool_segments": [
+      {
+        "start_time": 0,
+        "end_time": 10,
+        "description": "The hands are shown holding a red and black utility knife and cutting into the plastic bottle."
+      },
+      {
+        "start_time": 10,
+        "end_time": 22,
+        "description": "The hands are shown using the utility knife to cut along the length of the bottle."
+      },
+      {
+        "start_time": 22,
+        "end_time": 30,
+        "description": "The hands are shown using the utility knife to cut the plastic bottle in half."
+      },
+      {
+        "start_time": 30,
+        "end_time": 40,
+        "description": "The hands are shown using the utility knife to cut the plastic bottle in half."
+      }
+    ],
+    "reasoning": "The video shows a person's hands performing actions with tools, such as a utility knife and scissors. The actions are performed on a flat surface, and the camera is positioned above the surface, providing a top-down view. This perspective is consistent with a third-person view, not a first-person perspective. The use of tools is evident, and the hands are clearly visible throughout the video, making the tool usage clear and detailed."
+  },
+  "raw_output": "```json\n{\n  \"is_first_person\": false,\n  \"has_tool_usage\": true,\n  \"confidence\": \"high\",\n  \"tool_description\": \"A red and black utility knife and a pair of scissors are used in the video.\",\n  \"hand_tool_segments\": [\n    {\n      \"start_time\": 0,\n      \"end_time\": 10,\n      \"description\": \"The hands are shown holding a red and black utility knife and cutting into the plastic bottle.\"\n    },\n    {\n      \"start_time\": 10,\n      \"end_time\": 22,\n      \"description\": \"The hands are shown using the utility knife to cut along the length of the bottle.\"\n    },\n    {\n      \"start_time\": 22,\n      \"end_time\": 30,\n      \"description\": \"The hands are shown using the utility knife to cut the plastic bottle in half.\"\n    },\n    {\n      \"start_time\": 30,\n      \"end_time\": 40,\n      \"description\": \"The hands are shown using the utility knife to cut the plastic bottle in half.\"\n    }\n  ],\n  \"reasoning\": \"The video shows a person's hands performing actions with tools, such as a utility knife and scissors. The actions are performed on a flat surface, and the camera is positioned above the surface, providing a top-down view. This perspective is consistent with a third-person view, not a first-person perspective. The use of tools is evident, and the hands are clearly visible throughout the video, making the tool usage clear and detailed.\"\n}\n```",
+  "timestamp": "2025-11-07T12:51:28.785710"
+}
