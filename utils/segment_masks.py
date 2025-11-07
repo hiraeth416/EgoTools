@@ -10,6 +10,7 @@ import json
 import cv2
 import argparse
 from datetime import datetime
+from tqdm import tqdm
 
 
 class HandToolSegmenter:
@@ -74,108 +75,84 @@ class HandToolSegmenter:
         if use_grounding_dino:
             try:
                 from groundingdino.util.inference import load_model, predict
-                from groundingdino.util.utils import clean_state_dict
                 import groundingdino.datasets.transforms as T
                 
                 print("Loading Grounding DINO model...")
-                # Using GroundingDINO config and checkpoint
-                grounding_dino_config = "GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py"
+                
+                # Check checkpoint exists
                 grounding_dino_checkpoint = "checkpoints/groundingdino_swint_ogc.pth"
-                
                 if not Path(grounding_dino_checkpoint).exists():
-                    print(f"Warning: Grounding DINO checkpoint not found at {grounding_dino_checkpoint}")
-                    print("Please download it with:")
-                    print("wget https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha/groundingdino_swint_ogc.pth -P checkpoints/")
-                    print("\nFalling back to SAM2 auto-segmentation mode")
-                    self.use_grounding_dino = False
-                    self.grounding_dino_model = None
-                else:
-                    self.grounding_dino_model = load_model(grounding_dino_config, grounding_dino_checkpoint)
-                    self.grounding_dino_predict = predict
+                    error_msg = f"Grounding DINO checkpoint not found at {grounding_dino_checkpoint}\n"
+                    error_msg += "Please download it with:\n"
+                    error_msg += "wget https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha/groundingdino_swint_ogc.pth -P checkpoints/"
+                    raise FileNotFoundError(error_msg)
+                
+                # Try to find config file in different possible locations
+                possible_configs = [
+                    "GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py",
+                    "groundingdino/config/GroundingDINO_SwinT_OGC.py",
+                ]
+                
+                grounding_dino_config = None
+                for config_path in possible_configs:
+                    if Path(config_path).exists():
+                        grounding_dino_config = config_path
+                        break
+                
+                if grounding_dino_config is None:
+                    # Try to use package config
+                    try:
+                        import groundingdino
+                        package_path = Path(groundingdino.__file__).parent
+                        config_path = package_path / "config" / "GroundingDINO_SwinT_OGC.py"
+                        if config_path.exists():
+                            grounding_dino_config = str(config_path)
+                    except:
+                        pass
+                
+                if grounding_dino_config is None:
+                    error_msg = "Grounding DINO config file not found!\n"
+                    error_msg += "Please install Grounding DINO:\n"
+                    error_msg += "  git clone https://github.com/IDEA-Research/GroundingDINO.git\n"
+                    error_msg += "  cd GroundingDINO\n"
+                    error_msg += "  pip install -e .\n"
+                    error_msg += "Or install via pip:\n"
+                    error_msg += "  pip install groundingdino-py"
+                    raise FileNotFoundError(error_msg)
+                
+                print(f"Using config: {grounding_dino_config}")
+                print(f"Using checkpoint: {grounding_dino_checkpoint}")
+                
+                self.grounding_dino_model = load_model(grounding_dino_config, grounding_dino_checkpoint)
+                self.grounding_dino_predict = predict
+                
+                # Transform for Grounding DINO
+                self.transform = T.Compose([
+                    T.RandomResize([800], max_size=1333),
+                    T.ToTensor(),
+                    T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+                ])
+                print("✓ Grounding DINO model loaded successfully")
                     
-                    # Transform for Grounding DINO
-                    self.transform = T.Compose([
-                        T.RandomResize([800], max_size=1333),
-                        T.ToTensor(),
-                        T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
-                    ])
-                    print("Grounding DINO model loaded successfully")
-                    
-            except ImportError:
-                print("Warning: Grounding DINO not installed. Using SAM2 auto-segmentation mode.")
-                print("To install Grounding DINO:")
-                print("  pip install groundingdino-py")
+            except ImportError as e:
+                error_msg = f"Grounding DINO not installed: {e}\n"
+                error_msg += "Please install Grounding DINO:\n"
+                error_msg += "  pip install groundingdino-py\n"
+                error_msg += "Or from source:\n"
+                error_msg += "  git clone https://github.com/IDEA-Research/GroundingDINO.git\n"
+                error_msg += "  cd GroundingDINO && pip install -e ."
+                print(f"Error: {error_msg}")
                 self.use_grounding_dino = False
                 self.grounding_dino_model = None
+                raise ImportError(error_msg)
             except Exception as e:
-                print(f"Warning: Error loading Grounding DINO: {e}")
-                print("Falling back to SAM2 auto-segmentation mode")
+                error_msg = f"Error loading Grounding DINO: {e}"
+                print(f"Error: {error_msg}")
+                import traceback
+                traceback.print_exc()
                 self.use_grounding_dino = False
                 self.grounding_dino_model = None
-import torch
-import numpy as np
-from pathlib import Path
-import json
-import cv2
-import argparse
-from datetime import datetime
-
-
-class HandToolSegmenter:
-    def __init__(self, model_name="facebook/sam2-hiera-large", checkpoint_path=None):
-        """
-        Initialize SAM2 model
-        
-        Args:
-            model_name: Model name for from_pretrained (e.g., "facebook/sam2-hiera-large")
-            checkpoint_path: Optional local checkpoint path (if None, will download from HuggingFace)
-        """
-        try:
-            from sam2.sam2_video_predictor import SAM2VideoPredictor
-            from sam2.sam2_image_predictor import SAM2ImagePredictor
-        except ImportError:
-            raise ImportError(
-                "SAM2 not installed. Please install with: "
-                "pip install git+https://github.com/facebookresearch/segment-anything-2.git"
-            )
-        
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        print(f"Using device: {self.device}")
-        
-        print(f"Loading SAM2 model: {model_name}")
-        
-        try:
-            # Load video predictor
-            if checkpoint_path and Path(checkpoint_path).exists():
-                print(f"Loading from local checkpoint: {checkpoint_path}")
-                # For local checkpoint, need to use build_sam approach
-                from sam2.build_sam import build_sam2_video_predictor
-                
-                # Map checkpoint filename to config
-                checkpoint_name = Path(checkpoint_path).stem
-                config_map = {
-                    "sam2_hiera_tiny": "sam2_hiera_t",
-                    "sam2_hiera_small": "sam2_hiera_s",
-                    "sam2_hiera_base_plus": "sam2_hiera_b+",
-                    "sam2_hiera_large": "sam2_hiera_l",
-                }
-                model_cfg = config_map.get(checkpoint_name, "sam2_hiera_l")
-                
-                self.video_predictor = build_sam2_video_predictor(model_cfg, checkpoint_path)
-                self.image_predictor = SAM2ImagePredictor.from_pretrained(model_name)
-            else:
-                # Download from HuggingFace
-                print(f"Loading from HuggingFace: {model_name}")
-                self.video_predictor = SAM2VideoPredictor.from_pretrained(model_name)
-                self.image_predictor = SAM2ImagePredictor.from_pretrained(model_name)
-            
-            print("SAM2 model loaded successfully")
-        except Exception as e:
-            print(f"Error loading model: {e}")
-            print("\nIf using local checkpoint, make sure it exists:")
-            print("  checkpoints/sam2_hiera_large.pt")
-            print("\nOr the model will be downloaded from HuggingFace automatically.")
-            raise
+                raise
     
     def _load_tool_names_from_analysis(self, segment_dir):
         """
@@ -251,31 +228,38 @@ class HandToolSegmenter:
         if not self.use_grounding_dino or self.grounding_dino_model is None:
             return None, None, None
         
-        # Convert to PIL Image
-        from PIL import Image as PILImage
-        if isinstance(image, np.ndarray):
-            pil_image = PILImage.fromarray(image)
-        else:
-            pil_image = image
+        try:
+            # Convert to PIL Image
+            from PIL import Image as PILImage
+            if isinstance(image, np.ndarray):
+                pil_image = PILImage.fromarray(image)
+            else:
+                pil_image = image
+            
+            # Transform image
+            image_transformed, _ = self.transform(pil_image, None)
+            
+            # Predict
+            boxes, logits, phrases = self.grounding_dino_predict(
+                model=self.grounding_dino_model,
+                image=image_transformed,
+                caption=text_prompt,
+                box_threshold=box_threshold,
+                text_threshold=text_threshold,
+                device=self.device
+            )
+            
+            # Convert boxes to image coordinates
+            h, w = image.shape[:2] if isinstance(image, np.ndarray) else (pil_image.height, pil_image.width)
+            boxes = boxes * torch.tensor([w, h, w, h], device=boxes.device)
+            
+            return boxes.cpu().numpy(), logits.cpu().numpy(), phrases
         
-        # Transform image
-        image_transformed, _ = self.transform(pil_image, None)
-        
-        # Predict
-        boxes, logits, phrases = self.grounding_dino_predict(
-            model=self.grounding_dino_model,
-            image=image_transformed,
-            caption=text_prompt,
-            box_threshold=box_threshold,
-            text_threshold=text_threshold,
-            device=self.device
-        )
-        
-        # Convert boxes to image coordinates
-        h, w = image.shape[:2] if isinstance(image, np.ndarray) else (pil_image.height, pil_image.width)
-        boxes = boxes * torch.tensor([w, h, w, h], device=boxes.device)
-        
-        return boxes.cpu().numpy(), logits.cpu().numpy(), phrases
+        except Exception as e:
+            print(f"\nError in Grounding DINO detection: {e}")
+            import traceback
+            traceback.print_exc()
+            return None, None, None
     
     def segment_video_with_prompts(self, video_path, output_dir, prompt_frame=0, hand_points=None, tool_points=None):
         """
@@ -352,8 +336,71 @@ class HandToolSegmenter:
         print(f"✓ Segmentation complete! Saved {results['total_masks']} masks")
         return results
     
+    def _nms_detections(self, detections, iou_threshold=0.5):
+        """Non-maximum suppression for detections"""
+        if not detections:
+            return []
+        
+        boxes = np.array([d['box'] for d in detections])
+        scores = np.array([d['logit'] for d in detections])
+        
+        # Simple NMS
+        keep = []
+        indices = scores.argsort()[::-1]
+        
+        while len(indices) > 0:
+            i = indices[0]
+            keep.append(i)
+            
+            if len(indices) == 1:
+                break
+            
+            # Compute IoU
+            ious = self._compute_iou(boxes[i], boxes[indices[1:]])
+            indices = indices[1:][ious < iou_threshold]
+        
+        return [detections[i] for i in keep]
+    
+    def _compute_iou(self, box1, boxes):
+        """Compute IoU between box1 and multiple boxes"""
+        x1 = np.maximum(box1[0], boxes[:, 0])
+        y1 = np.maximum(box1[1], boxes[:, 1])
+        x2 = np.minimum(box1[2], boxes[:, 2])
+        y2 = np.minimum(box1[3], boxes[:, 3])
+        
+        intersection = np.maximum(0, x2 - x1) * np.maximum(0, y2 - y1)
+        
+        area1 = (box1[2] - box1[0]) * (box1[3] - box1[1])
+        area2 = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+        
+        union = area1 + area2 - intersection
+        
+        return intersection / (union + 1e-6)
+    
+    def _postprocess_mask(self, mask, box):
+        """Post-process mask to improve quality"""
+        # Morphological operations
+        kernel = np.ones((5, 5), np.uint8)
+        mask_uint8 = (mask * 255).astype(np.uint8)
+        
+        # Close operation to fill holes
+        mask_uint8 = cv2.morphologyEx(mask_uint8, cv2.MORPH_CLOSE, kernel)
+        
+        # Open operation to remove noise
+        mask_uint8 = cv2.morphologyEx(mask_uint8, cv2.MORPH_OPEN, kernel)
+        
+        # Ensure mask is within box bounds
+        final_mask = np.zeros_like(mask_uint8)
+        x1, y1, x2, y2 = box.astype(int)
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(mask.shape[1], x2), min(mask.shape[0], y2)
+        
+        final_mask[y1:y2, x1:x2] = mask_uint8[y1:y2, x1:x2]
+        
+        return (final_mask > 127).astype(bool)
+    
     def segment_video_with_grounding_dino(self, video_path, output_dir, tool_names=None, 
-                                         segment_dir=None, sample_interval=5):
+                                         segment_dir=None, sample_interval=3, debug=False):
         """
         Segment video using Grounding DINO for detection + SAM2 for segmentation
         
@@ -362,11 +409,19 @@ class HandToolSegmenter:
             output_dir: Output directory for masks
             tool_names: List of tool names to detect (e.g., ["knife", "scissors"])
             segment_dir: Path to segment directory (to load tool names from analysis)
+            sample_interval: Sample every N frames (default: 3)
+            debug: Whether to print debug information (default: False)
+            segment_dir: Path to segment directory (to load tool names from analysis)
             sample_interval: Sample every N frames (default: 5)
         
         Returns:
             Dictionary with segmentation results
         """
+        # Check if Grounding DINO is available
+        if not self.use_grounding_dino or self.grounding_dino_model is None:
+            print("Warning: Grounding DINO not available, falling back to auto-segmentation")
+            return self.auto_segment_video(video_path, output_dir, sample_interval=sample_interval)
+        
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
         
@@ -378,10 +433,9 @@ class HandToolSegmenter:
             tool_names = self._load_tool_names_from_analysis(segment_dir)
             print(f"Loaded tool names from analysis: {tool_names}")
         elif tool_names is None:
-            tool_names = ['tool']
+            tool_names = ['tool', 'object']
         
-        # Build text prompt for Grounding DINO
-        # Format: "hand . knife . scissors"
+        # Build text prompt for Grounding DINO using tool names directly
         text_prompt = "hand . " + " . ".join(tool_names)
         print(f"Text prompt: '{text_prompt}'")
         
@@ -409,17 +463,55 @@ class HandToolSegmenter:
         
         all_masks = []
         total_masks = 0
+        frames_with_detections = 0
         
-        for frame_idx, frame in frames_to_process:
-            print(f"Processing frame {frame_idx}...", end='\r')
+        # Use tqdm for progress bar
+        for frame_idx, frame in tqdm(frames_to_process, desc="Segmenting frames", disable=debug):
+            if debug:
+                print(f"Processing frame {frame_idx}...")
             
-            # Detect objects with Grounding DINO
-            boxes, logits, phrases = self.detect_objects_with_grounding_dino(
-                frame, text_prompt, box_threshold=0.25, text_threshold=0.2
-            )
+            # Multi-scale detection for better recall
+            all_detections = []
             
-            if boxes is None or len(boxes) == 0:
+            for scale in [1.0, 0.9]:  # Reduced to 2 scales to minimize duplicates
+                if scale != 1.0:
+                    h, w = frame.shape[:2]
+                    scaled_frame = cv2.resize(frame, (int(w*scale), int(h*scale)))
+                else:
+                    scaled_frame = frame
+                
+                # Detect objects with Grounding DINO
+                boxes, logits, phrases = self.detect_objects_with_grounding_dino(
+                    scaled_frame, text_prompt, 
+                    box_threshold=0.15,  # Slightly higher to reduce duplicates
+                    text_threshold=0.10
+                )
+                
+                if boxes is not None and len(boxes) > 0:
+                    # Scale boxes back to original size
+                    if scale != 1.0:
+                        boxes = boxes / scale
+                    
+                    for box, logit, phrase in zip(boxes, logits, phrases):
+                        all_detections.append({
+                            'box': box,
+                            'logit': logit,
+                            'phrase': phrase
+                        })
+            
+            # Apply NMS to remove duplicates with higher IoU threshold
+            if all_detections:
+                all_detections = self._nms_detections(all_detections, iou_threshold=0.7)
+            
+            if not all_detections:
                 continue
+            
+            # Debug: print detections info
+            if debug:
+                det_phrases = [d['phrase'] for d in all_detections]
+                print(f"Frame {frame_idx}: Detected {len(all_detections)} objects - {det_phrases}")
+            
+            frames_with_detections += 1
             
             # Create frame directory
             frame_dir = output_path / f"frame_{frame_idx:04d}"
@@ -433,17 +525,36 @@ class HandToolSegmenter:
             self.image_predictor.set_image(frame)
             
             frame_masks = []
-            for i, (box, logit, phrase) in enumerate(zip(boxes, logits, phrases)):
-                # Convert box to SAM2 format (xyxy)
-                box_xyxy = box  # Already in xyxy format
+            for i, det in enumerate(all_detections):
+                box = det['box']
+                phrase = det['phrase']
+                logit = det['logit']
                 
-                # Segment with SAM2
+                # Generate multiple prompt points for better segmentation
+                cx = (box[0] + box[2]) / 2
+                cy = (box[1] + box[3]) / 2
+                
+                # Sample multiple points within the box
+                points = np.array([
+                    [cx, cy],  # Center
+                    [box[0] + (box[2]-box[0])*0.3, box[1] + (box[3]-box[1])*0.3],  # Top-left region
+                    [box[0] + (box[2]-box[0])*0.7, box[1] + (box[3]-box[1])*0.7],  # Bottom-right region
+                ], dtype=np.float32)
+                
+                # Segment with SAM2 using box + points for better accuracy
                 masks, scores, _ = self.image_predictor.predict(
-                    box=box_xyxy[None, :],
-                    multimask_output=False,
+                    box=box[None, :],
+                    point_coords=points,
+                    point_labels=np.array([1, 1, 1]),  # All foreground points
+                    multimask_output=True,  # Generate multiple candidates
                 )
                 
-                mask = masks[0]  # Take the first mask
+                # Select best mask based on score
+                best_idx = np.argmax(scores)
+                mask = masks[best_idx]
+                
+                # Post-process mask to improve quality
+                mask = self._postprocess_mask(mask, box)
                 
                 # Determine object type from phrase
                 if 'hand' in phrase.lower():
@@ -478,7 +589,7 @@ class HandToolSegmenter:
                     'masks': frame_masks
                 })
         
-        print(f"\nProcessed {len(all_masks)} frames")
+        print(f"\nProcessed {frames_with_detections} frames with detections (out of {len(frames_to_process)} sampled)")
         
         # Save metadata
         metadata = {
@@ -486,13 +597,27 @@ class HandToolSegmenter:
             'total_frames': total_frames,
             'fps': fps,
             'frames_sampled': len(frames_to_process),
+            'frames_with_detections': frames_with_detections,
             'frames_with_masks': len(all_masks),
             'sample_interval': sample_interval,
             'tool_names': tool_names,
             'text_prompt': text_prompt,
             'total_masks': total_masks,
+            'detection_settings': {
+                'box_threshold': 0.15,
+                'text_threshold': 0.10,
+                'multiscale': True,
+                'scales': [0.9, 1.0],
+                'nms_threshold': 0.7
+            },
+            'segmentation_settings': {
+                'multimask_output': True,
+                'use_point_prompts': True,
+                'num_points': 3,
+                'postprocess': True
+            },
             'timestamp': datetime.now().isoformat(),
-            'method': 'grounding_dino_sam2'
+            'method': 'grounding_dino_sam2_enhanced'
         }
         
         with open(output_path / 'segmentation_metadata.json', 'w') as f:
@@ -807,7 +932,8 @@ class HandToolSegmenter:
 
 
 def process_all_segments(output_results_dir, model_name="facebook/sam2-hiera-large", 
-                        checkpoint_path=None, mode='grounding_dino', sample_interval=5, max_masks_per_frame=3):
+                        checkpoint_path=None, mode='grounding_dino', sample_interval=5, 
+                        max_masks_per_frame=3, debug=False):
     """
     Process all video segments and generate masks
     
@@ -818,6 +944,7 @@ def process_all_segments(output_results_dir, model_name="facebook/sam2-hiera-lar
         mode: 'grounding_dino' (recommended), 'auto', or 'manual'
         sample_interval: Sample every N frames (default: 5)
         max_masks_per_frame: Maximum masks to keep per frame for auto mode (default: 3)
+        debug: Whether to print debug information (default: False)
     """
     use_grounding_dino = (mode == 'grounding_dino')
     segmenter = HandToolSegmenter(
@@ -867,7 +994,8 @@ def process_all_segments(output_results_dir, model_name="facebook/sam2-hiera-lar
                             str(video_file),
                             str(masks_dir),
                             segment_dir=str(seg_dir),
-                            sample_interval=sample_interval
+                            sample_interval=sample_interval,
+                            debug=debug
                         )
                     elif mode == 'auto':
                         # Auto segment (no manual prompts needed)
@@ -906,10 +1034,12 @@ def main():
                        help='Local checkpoint path (optional, will use HuggingFace if not found)')
     parser.add_argument('--mode', type=str, choices=['grounding_dino', 'auto', 'manual'], default='grounding_dino',
                        help='Segmentation mode: grounding_dino (recommended), auto, or manual')
-    parser.add_argument('--sample-interval', type=int, default=5,
-                       help='Sample every N frames (default: 5)')
-    parser.add_argument('--max-masks', type=int, default=3,
-                       help='Maximum masks per frame for auto mode (default: 3)')
+    parser.add_argument('--sample-interval', type=int, default=3,
+                       help='Sample every N frames (default: 3, lower for better coverage)')
+    parser.add_argument('--max-masks', type=int, default=5,
+                       help='Maximum masks per frame for auto mode (default: 5)')
+    parser.add_argument('--debug', action='store_true',
+                       help='Enable debug output (show detection info for all frames)')
     parser.add_argument('--single-segment', type=str, default=None,
                        help='Process single segment (format: platform/video_id/segment_N)')
     
@@ -944,7 +1074,8 @@ def main():
                 str(video_file),
                 str(masks_dir),
                 segment_dir=str(segment_path),
-                sample_interval=args.sample_interval
+                sample_interval=args.sample_interval,
+                debug=args.debug
             )
         else:
             segmenter.auto_segment_video(
@@ -961,7 +1092,8 @@ def main():
             checkpoint_path=args.checkpoint,
             mode=args.mode,
             sample_interval=args.sample_interval,
-            max_masks_per_frame=args.max_masks
+            max_masks_per_frame=args.max_masks,
+            debug=args.debug
         )
 
 
