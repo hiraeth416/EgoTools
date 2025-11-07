@@ -122,11 +122,22 @@ Please return the result in JSON format with the following fields:
   "confidence": "high/medium/low",
   "tool_description": "Description of the tools used",
   "hand_tool_segments": [
-    {"start_time": 0, "end_time": 10, "description": "Description of actions in this segment"},
+    {
+      "start_time": 0, 
+      "end_time": 10, 
+      "tool": "specific tool name (e.g., knife, hammer, screwdriver)",
+      "action": "specific action performed (e.g., cutting, hammering, screwing)",
+      "description": "detailed description of what is happening in this segment"
+    },
     ...
   ],
   "reasoning": "Reasoning for the judgment"
-}"""
+}
+
+IMPORTANT: For each segment in hand_tool_segments, you MUST provide:
+- tool: The specific name of the tool being used (e.g., "utility knife", "scissors", "hammer")
+- action: The specific action being performed (e.g., "cutting plastic bottle", "trimming edges", "hammering nail")
+- description: A complete description combining tool and action"""
                     },
                 ],
             }
@@ -178,19 +189,30 @@ Please return in JSON format: {"is_first_person": true/false, "confidence": "hig
                     {
                         "type": "text", 
                         "text": """Please carefully observe this video and identify all time periods where human hands and tools appear together in the frame.
-                                For each such segment, please provide:
-                                1. Start time (seconds)
-                                2. End time (seconds)
-                                3. Brief description (tools used and actions performed)
 
-                                Please return in JSON format:
-                                {
-                                  "segments": [
-                                    {"start_time": 0, "end_time": 5, "tool": "tool name", "action": "action description"},
-                                    ...
-                                  ],
-                                  "total_segments": count
-                                }"""
+For each such segment, please provide:
+1. Start time (seconds)
+2. End time (seconds)
+3. Tool name - the specific tool being used (e.g., "utility knife", "scissors", "hammer", "screwdriver")
+4. Action - the specific action being performed (e.g., "cutting plastic bottle", "trimming paper", "hammering nail")
+5. Description - brief description combining tool and action
+
+Please return in JSON format:
+{
+  "segments": [
+    {
+      "start_time": 0, 
+      "end_time": 5, 
+      "tool": "specific tool name",
+      "action": "specific action description",
+      "description": "complete description"
+    },
+    ...
+  ],
+  "total_segments": count
+}
+
+IMPORTANT: Always provide the "tool" field with the specific tool name, not empty or generic descriptions."""
                     },
                 ],
             }
@@ -198,7 +220,7 @@ Please return in JSON format: {"is_first_person": true/false, "confidence": "hig
         
         return self._generate_response(messages)
     
-    def _generate_response(self, messages, max_new_tokens=512):
+    def _generate_response(self, messages, max_new_tokens=4096):
         """Generate model response"""
         inputs = self.processor.apply_chat_template(
             messages,
@@ -415,28 +437,68 @@ def process_videos(download_dir="download", output_dir=None, use_flash_attention
             print(f"Analysis result:\n{analysis_result}")
             
             # Try to parse JSON result
+            parsed_result = None
             try:
-                # Try to extract JSON from output
+                # Try to extract JSON from output (VLM often wraps JSON in ```json...```)
                 if "{" in analysis_result and "}" in analysis_result:
                     json_start = analysis_result.find("{")
                     json_end = analysis_result.rfind("}") + 1
                     json_str = analysis_result[json_start:json_end]
                     parsed_result = json.loads(json_str)
-                else:
-                    parsed_result = {"raw_response": analysis_result}
-            except json.JSONDecodeError:
-                parsed_result = {"raw_response": analysis_result}
+            except json.JSONDecodeError as e:
+                print(f"Warning: Failed to parse JSON: {e}")
+                
+                # Try to fix incomplete JSON by adding missing closing brackets
+                try:
+                    if "{" in analysis_result:
+                        json_start = analysis_result.find("{")
+                        json_str = analysis_result[json_start:]
+                        
+                        # Count opening and closing brackets
+                        open_braces = json_str.count('{')
+                        close_braces = json_str.count('}')
+                        open_brackets = json_str.count('[')
+                        close_brackets = json_str.count(']')
+                        
+                        # Add missing closing brackets/braces
+                        fixed_json = json_str
+                        if open_brackets > close_brackets:
+                            fixed_json += ']' * (open_brackets - close_brackets)
+                        if open_braces > close_braces:
+                            fixed_json += '}' * (open_braces - close_braces)
+                        
+                        # Try to parse the fixed JSON
+                        parsed_result = json.loads(fixed_json)
+                        print("Successfully fixed and parsed incomplete JSON")
+                except:
+                    parsed_result = None
             
             # Save result
-            result = {
-                'video_id': video_id,
-                'platform': platform,
-                'title': title,
-                'video_path': video_path,
-                'analysis': parsed_result,
-                'raw_output': analysis_result,
-                'timestamp': datetime.now().isoformat()
-            }
+            if parsed_result:
+                # Successfully parsed JSON
+                result = {
+                    'video_id': video_id,
+                    'platform': platform,
+                    'title': title,
+                    'video_path': video_path,
+                    'analysis': parsed_result,
+                    'raw_output': analysis_result,
+                    'timestamp': datetime.now().isoformat()
+                }
+            else:
+                # Failed to parse, store raw response
+                result = {
+                    'video_id': video_id,
+                    'platform': platform,
+                    'title': title,
+                    'video_path': video_path,
+                    'analysis': {
+                        'error': 'Failed to parse VLM response',
+                        'hand_tool_segments': []
+                    },
+                    'raw_output': analysis_result,
+                    'timestamp': datetime.now().isoformat()
+                }
             results.append(result)
             
         except Exception as e:
@@ -450,15 +512,9 @@ def process_videos(download_dir="download", output_dir=None, use_flash_attention
                 'timestamp': datetime.now().isoformat()
             }
             results.append(result)
-    
-    # Save comprehensive results to JSON
-    summary_file = output_dir / "analysis_summary.json"
-    with open(summary_file, 'w', encoding='utf-8') as f:
-        json.dump(results, f, ensure_ascii=False, indent=2)
-    
+        
     print(f"\nAnalysis complete!")
     print(f"Results saved in: {output_dir}")
-    print(f"- Comprehensive results: analysis_summary.json")
     print(f"  Total videos analyzed: {len(results)}")
     
     # Cut videos based on analysis results
@@ -479,8 +535,8 @@ def process_videos(download_dir="download", output_dir=None, use_flash_attention
 
 def main():
     parser = argparse.ArgumentParser(description='Analyze videos using Qwen3-VL')
-    parser.add_argument('--download-dir', type=str, default='download', help='Local video download directory (default: download/)')
-    parser.add_argument('--output-dir', type=str, default='output_results', help='Output directory')
+    parser.add_argument('--download-dir', type=str, default='test_data/download', help='Local video download directory (default: download/)')
+    parser.add_argument('--output-dir', type=str, default='test_data/output_results', help='Output directory')
     parser.add_argument('--flash-attention', action='store_true', help='Use flash attention 2')
     parser.add_argument('--single-video', type=str, default=None, help='Analyze only a single video ID (format: platform/video_id)')
     parser.add_argument('--no-cut', action='store_true', help='Skip video cutting, only perform analysis')
