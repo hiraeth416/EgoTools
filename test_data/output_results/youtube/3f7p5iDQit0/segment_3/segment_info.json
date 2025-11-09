@@ -1,12 +1,12 @@
 {
   "segment_id": 3,
-  "start_time": 30,
-  "end_time": 40,
-  "duration": 10,
-  "description": "The hands are shown using the utility knife to cut the plastic bottle in half.",
-  "tool": "",
-  "action": "The hands are shown using the utility knife to cut the plastic bottle in half.",
-  "source_video": "/home/sifei/EgoTools/download/youtube/3f7p5iDQit0/POV ｜ DIY New Creative Ideas Tip Make Plastic Bottle  To Tool Use Daily at Kitchen-Trillions Well-3f7p5iDQit0.mp4",
+  "start_time": 28,
+  "end_time": 30,
+  "duration": 2,
+  "description": "The person continues to use scissors to cut the plastic bottle. The scissors are being used to cut the plastic, and the person is holding the bottle steady with their other hand.",
+  "tool": "scissors",
+  "action": "cutting plastic bottle",
+  "source_video": "test_data/download/youtube/3f7p5iDQit0/POV ｜ DIY New Creative Ideas Tip Make Plastic Bottle  To Tool Use Daily at Kitchen-Trillions Well-3f7p5iDQit0.mp4",
   "source_video_id": "3f7p5iDQit0",
   "platform": "youtube"
 }
