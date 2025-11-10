@@ -3,10 +3,10 @@
   "start_time": 0,
   "end_time": 10,
   "duration": 10,
-  "description": "The hands are shown holding a red and black utility knife and cutting into the plastic bottle.",
-  "tool": "",
-  "action": "The hands are shown holding a red and black utility knife and cutting into the plastic bottle.",
-  "source_video": "/home/sifei/EgoTools/download/youtube/3f7p5iDQit0/POV ｜ DIY New Creative Ideas Tip Make Plastic Bottle  To Tool Use Daily at Kitchen-Trillions Well-3f7p5iDQit0.mp4",
+  "description": "A person is using a utility knife to cut a plastic bottle. The knife is being used to cut through the plastic, and the person is holding the bottle steady with their other hand.",
+  "tool": "utility knife",
+  "action": "cutting plastic bottle",
+  "source_video": "test_data/download/youtube/3f7p5iDQit0/POV ｜ DIY New Creative Ideas Tip Make Plastic Bottle  To Tool Use Daily at Kitchen-Trillions Well-3f7p5iDQit0.mp4",
   "source_video_id": "3f7p5iDQit0",
   "platform": "youtube"
 }
